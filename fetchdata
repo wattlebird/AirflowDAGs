@@ -1,0 +1,25 @@
+#!/bin/bash
+# fetch record and subject file from azure storage service
+
+recordfile=$(az storage blob list -c bangumi --account-key $AZURE_STORAGE_IKELY_KEY --account-name $AZURE_STORAGE_IKELY_ACCOUNT -o table --prefix record | sed 1,2d | tr -s '\040' '\011' | cut -f1,5 | sort -t$'\t' -k2,2r | sed 1q | sed 's/\t.*//g')
+
+subjectfile=$(az storage blob list -c bangumi --account-key $AZURE_STORAGE_IKELY_KEY --account-name $AZURE_STORAGE_IKELY_ACCOUNT -o table --prefix subject | sed 1,2d | tr -s '\040' '\011' | cut -f1,5 | sort -t$'\t' -k2,2r | sed 1q | sed 's/\t.*//g')
+
+recordmonth=$(echo $recordfile | cut -t'-' -f3)
+subjectmonth=$(echo $subjectfile | cut -t'-' -f3)
+
+[ $recordmonth != $subjectmonth ] exit 0;
+[ -z $recordfile ] az storage blob download -c bangumi --account-key $AZURE_STORAGE_IKELY_KEY --account-name $AZURE_STORAGE_IKELY_ACCOUNT -n "$recordfile" -f "$recordfile"
+[ -z $subjectfile ] az storage blob download -c bangumi --account-key $AZURE_STORAGE_IKELY_KEY --account-name $AZURE_STORAGE_IKELY_ACCOUNT -n "$subjectfile" -f "$subjectfile"
+
+# Preprocess files to remove scrapy error
+sed 1d $subjectfile | awk -F "\t" 'BEGIN {pre=""} NF==10 {print $0; pre="";} NF!=10 { if(pre=="") {pre=$0;} else{printf("%s%s",pre,$0); pre=""}}' | sort -t$'\t' -k2,2n > /tmp/subject.sorted
+sed 1d $recordfile | awk -F "\t" 'BEGIN {pre=""} NF==9 {print $0; pre="";} NF!=9 { if(pre=="") {pre=$0;} else{printf("%s%s",pre,$0); pre=""}}' | sort -t$'\t' -k1,1n -k7,7 > /tmp/record.sorted
+# Get user.tsv
+tac /tmp/record.sorted | awk -F "\t" 'BEGIN {pre=0} pre!=$1 { printf("%d\t%s\t%s\t%s\n", $1, $2, $3, $7); pre=$1}' | tac > user.tsv
+# Join correct subject id
+cut -f2,3 --complement /tmp/record.sorted | sort -t$'\t' -k2,2 > /tmp/record.right
+cut -f1,2 /tmp/subject.sorted | sort -t$'\t' -k2,2 > /tmp/subject.left
+join -12 -22 -t$'\t' -o 2.1,1.1,2.3,2.4,2.5,2.6,2.7,2.8 /tmp/subject.left /tmp/record.right | sort -t$'\t' -k1,1n -k5,5 > record.tsv
+# Remove duplicated subject in subject.tsv
+awk -F "\t" '$1==$2 {print $0;}' < /tmp/subject.sorted | cut -f2 --complement > subject.tsv
